@@ -5,58 +5,57 @@ train model with train dataset, validate and save best model with val dataset
 test model with best model (trained by 60%, validated by 20%)
 """
 
-
 import os
 import time
 import matplotlib.pyplot as plt
+from pprint import pprint
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.optim import lr_scheduler
+from torch.utils.tensorboard import SummaryWriter
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-from src.dl_based.dataset import get_dataset, get_dataset_external_test
-from src.dl_based.Model2D import Model
+from src.dl_based.dataset import get_dataset_train_val_test, get_dataset_external_test
+from src.dl_based.Model2D import get_model
 from src.utils.util import get_logger
+from src.utils.AverageMeter import AverageMeter
 from src.utils.util4torch import get_device, net2device, save_checkpoint, resume_checkpoint
 from src.config import CHECKPOINT_DIR, classes
 from src.utils.SensitivitySpecificityStatistics import SensitivitySpecificityStatistics
 
 
-def train_config(config, train_ds, val_ds=None, model_file=None, num_epochs=20):
+def train_config(config, train_ds, val_ds, checkpoint_dir):
     lr = config["lr"]
     batch_size = int(config["batch_size"])
     weight_decay = config["weight_decay"]
     fix_depth = config["fix_depth"]
     backbone = config["backbone"]
+    num_epochs = config["num_epochs"]
 
-    logger = get_logger(name='haina')
+    logger = get_logger(name='clinical')
+    writer = SummaryWriter(log_dir=checkpoint_dir)
 
     trainloader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=8)
-    if val_ds is not None:
-        valloader = DataLoader(val_ds, batch_size=batch_size, shuffle=True, num_workers=8)
+    valloader = DataLoader(val_ds, batch_size=batch_size, shuffle=True, num_workers=8)
 
-    net = Model(fix_depth=fix_depth).model_define(backbone=backbone, n_class=len(classes))
+    net = get_model(fix_depth, backbone, len(classes))
     net2device(net)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, net.parameters()),
         lr=lr, weight_decay=weight_decay)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, [int(num_epochs * 0.8)], gamma=0.1)
 
-    # # scheduler (add scheduler, result get worse!!!)
-    # step1, step2 = num_epochs * 7 / 10, num_epochs * 9 / 10
-    # step1, step2 = int(step1), int(step2)
-    # scheduler = lr_scheduler.MultiStepLR(optimizer, [step1, step2], gamma=0.1)
+    start_epoch = resume_checkpoint(net, optimizer, checkpoint_dir=checkpoint_dir)
+    best = 0
+    for epoch in range(start_epoch, num_epochs + 1):
 
-    start_epoch = 0
-    if val_ds is not None:
-        start_epoch = resume_checkpoint(net, optimizer, checkpoint_dir=CHECKPOINT_DIR)
-    best_correct = 0
-    for epoch in range(start_epoch, num_epochs):  # loop over the dataset multiple times
-
+        logger.info(f'train at epoch {epoch}')
         net.train()
-        running_loss = 0.0
-        epoch_steps = 0
+        train_loss = AverageMeter()
         for i, (inputs, labels) in enumerate(trainloader, 0):
             inputs, labels = inputs.to(get_device()), labels.to(get_device())
 
@@ -70,45 +69,47 @@ def train_config(config, train_ds, val_ds=None, model_file=None, num_epochs=20):
             optimizer.step()
 
             # print statistics
-            running_loss += loss.item()
-            epoch_steps += 1
+            train_loss.update(loss.item())
+            writer.add_scalar("Loss/train/batch", train_loss.avg, (epoch - 1) * len(trainloader) + i)
             if i % 10 == 9:  # print every 10 mini-batches
                 lr = optimizer.param_groups[0]['lr']
-                info = f'Epoch: [{epoch + 1}, {i + 1}] loss: {running_loss / epoch_steps: .3f}\tlr: {lr}'
+                info = f'Epoch: [{epoch}/{num_epochs}, {i + 1}/{len(trainloader)}] loss: {train_loss.avg: .4f}\tlr: {lr}'
                 logger.info(info)
-                running_loss = 0.0
 
-        if val_ds is not None:
-            save_checkpoint(epoch, net, optimizer, checkpoint_dir=CHECKPOINT_DIR)
+        save_checkpoint(epoch, net, optimizer, checkpoint_dir=checkpoint_dir)
+        scheduler.step()
 
-            # Validation loss
-            net.eval()
-            val_loss = 0.0
-            val_steps = 0
-            total = 0
-            correct = 0
-            for i, (inputs, labels) in enumerate(valloader, 0):
-                with torch.no_grad():
-                    inputs, labels = inputs.to(get_device()), labels.to(get_device())
+        # Validation loss
+        logger.info(f'val at epoch {epoch}')
+        net.eval()
+        val_loss = AverageMeter()
+        val_acc = AverageMeter()
+        for i, (inputs, labels) in enumerate(valloader, 0):
+            with torch.no_grad():
+                inputs, labels = inputs.to(get_device()), labels.to(get_device())
 
-                    outputs = net(inputs)
-                    _, predicted = torch.max(outputs.data, 1)
-                    total += labels.size(0)
-                    correct += (predicted == labels).sum().item()
+                outputs = net(inputs)
+                _, predicted = torch.max(outputs.data, 1)
+                num = labels.size(0)
+                mean_val = (predicted == labels).sum().item() / num
+                val_acc.update(mean_val, num)
 
-                    loss = criterion(outputs, labels)
-                    val_loss += loss.cpu().numpy()
-                    val_steps += 1
+                loss = criterion(outputs, labels)
+                val_loss.update(loss.item())
 
-            if correct >= best_correct:
-                logger.info(f'the model of epoch {epoch} is improved and saved from correct = {best_correct} to {correct}')
-                best_correct = correct
-                torch.save(net.state_dict(), model_file)
-        else:
-            torch.save(net.state_dict(), model_file)        # save model for best solver_best_hyperparameter.py
+        info = f'Epoch: [{epoch}/{num_epochs}, val loss: {val_loss.avg: .4f}, val acc: {val_acc.avg: .4f}'
+        logger.info(info)
 
-        # scheduler.step()
+        writer.add_scalars("Loss",{'train': train_loss.avg, 'val': val_loss.avg}, epoch)
+        writer.add_scalar("Accuracy/val", val_acc.avg, epoch)
+        writer.flush()
 
+        if val_acc.avg >= best:
+            logger.info(f'the model of epoch {epoch} is improved and saved from val acc = {best} to {val_acc.avg}')
+            best = val_acc.avg
+            torch.save(net.state_dict(), os.path.join(checkpoint_dir, 'best.pth'))
+
+    writer.close()
     print("Finished Training")
 
 
@@ -147,12 +148,66 @@ def infer_each_class(net, test_ds, classes):
     probs = probs.data.cpu().numpy()
     return truth, probs
 
-def main():
-    timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
-    log_file = os.path.join(CHECKPOINT_DIR, f'{timestamp}.log')
-    logger = get_logger(name='haina', log_file=log_file, log_level='INFO')
 
-    train_ds, val_ds, test_ds = get_dataset()
+def analyze_log(log_path):
+    # get event files
+    files = []
+    for (dirpath, dirnames, filenames) in os.walk(log_path):
+        files.extend([os.path.join(dirpath, file) for file in filenames])
+    files = [file for file in files if "events.out.tfevents" in file]
+
+    # get result dictionary
+    result = {}
+    for file in files:
+        event_accu = EventAccumulator(file)
+        event_accu.Reload()
+        print(file)
+        print(f"Tags: {event_accu.Tags()}")
+
+        parent_dir, name = os.path.split(file)
+        parent_name = parent_dir.removeprefix(log_path)
+
+        for name in event_accu.Tags()["scalars"]:
+            events = event_accu.Scalars(name)
+            result[name if not parent_name else parent_name] = [(e.step, e.value) for e in events]
+
+    pprint(result)
+
+    batchs = [epoch for epoch, value in result['Loss/train/batch']]
+    train_loss_batch = [value for epoch, value in result['Loss/train/batch']]
+    plt.plot(batchs, train_loss_batch, "b", label="Train loss batch")
+    plt.xlabel("Batchs")
+    plt.ylabel("Loss")
+    plt.legend()
+
+    epochs = [epoch for epoch, value in result['/Loss_train']]
+    train_loss = [value for epoch, value in result['/Loss_train']]
+    val_loss = [value for epoch, value in result['/Loss_val']]
+    val_acc = [value for epoch, value in result['Accuracy/val']]
+    plt.figure()
+    plt.plot(epochs, train_loss, "bo", label="Train loss")
+    plt.plot(epochs, val_loss, "b", label="Validation loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.legend()
+
+    plt.figure()
+    plt.plot(epochs, train_loss, "bo", label="Train loss")
+    plt.plot(epochs, val_acc, "b", label="Validation Accuracy")
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy")
+    plt.legend()
+
+
+def main():
+    CHECKPOINT_DIR_NORMAL = os.path.join(CHECKPOINT_DIR, 'normal')
+    os.makedirs(CHECKPOINT_DIR_NORMAL, exist_ok=True)
+
+    timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+    log_file = os.path.join(CHECKPOINT_DIR_NORMAL, f'{timestamp}.log')
+    logger = get_logger(name='clinical', log_file=log_file, log_level='INFO')
+
+    train_ds, val_ds, test_ds = get_dataset_train_val_test()
     logger.info(
         f"length of train {len(train_ds)}, length of val {len(val_ds)}, length of test {len(test_ds)}")
 
@@ -161,16 +216,16 @@ def main():
         "weight_decay": 1e-4,
         "batch_size": 32,
         "fix_depth": 1,
-        "backbone": 'resnet18'
+        "backbone": 'resnet18',
+        "num_epochs": 100,
     }
     logger.info(f"hyperparameter is {config}")
 
-    model_file = os.path.join(CHECKPOINT_DIR, 'best.pth')
-    # train_config(config, train_ds, val_ds, model_file, num_epochs=20)
+    train_config(config, train_ds, val_ds, CHECKPOINT_DIR_NORMAL)
 
-    net = Model().model_define(n_class=len(classes))
+    net = get_model(config["fix_depth"], config["backbone"], len(classes))
     net2device(net)
-    net.load_state_dict(torch.load(model_file))
+    net.load_state_dict(torch.load(os.path.join(CHECKPOINT_DIR_NORMAL, 'best.pth')))
 
     truth, probs = infer_each_class(net, test_ds, classes)
     SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test')
@@ -181,6 +236,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # main()
+
+    # plot train/val loss to get optimal num_epochs, I recommend you play tensorboard with more functions.
+    analyze_log(os.path.join(CHECKPOINT_DIR, 'normal'))
 
     plt.show()

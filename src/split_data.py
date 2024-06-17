@@ -32,9 +32,9 @@ def split_train_test(data_dir):
 
     return (X_train, y_train), (X_test, y_test)
 
-def split_train_val_test(data_dir=DATA_DIR):
+def split_train_val_test(data_dir=DATA_DIR, ratio_val=0.25):
     (X_train, y_train), (X_test, y_test) = split_train_test(data_dir)
-    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.25, random_state=random_seed,
+    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=ratio_val, random_state=random_seed,
                                                       shuffle=True, stratify=y_train)  # 0.25 x 0.8 = 0.2
 
     return (X_train, y_train), (X_val, y_val), (X_test, y_test)

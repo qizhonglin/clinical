@@ -63,7 +63,7 @@ def cvt_mask_contour(image_file, mask_file, contour_file):
 
 
 def main():
-    from config import DATA_ROOT as root
+    from src.config import DATA_ROOT as root
 
     for group in ['huaxi', 'tianfu']:
         dir_images = os.path.join(root, group, "images")

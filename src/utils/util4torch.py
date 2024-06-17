@@ -23,7 +23,7 @@ def save_checkpoint(epoch, model, optimizer, checkpoint_dir):
      'epoch_' in file]
     save_file_path = os.path.join(checkpoint_dir, 'epoch_{}.pth'.format(epoch))
     states = {
-        'epoch': epoch + 1,
+        'epoch': epoch,
         'state_dict': model.state_dict(),
         'optimizer': optimizer.state_dict()
     }
@@ -35,13 +35,13 @@ def save_checkpoint(epoch, model, optimizer, checkpoint_dir):
 
 
 def resume_checkpoint(model, optimizer, checkpoint_dir):
-    start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+    start_epoch = 1  # start from epoch 1 or last checkpoint epoch
     model_file = os.path.join(checkpoint_dir, 'latest.pth')
     if os.path.exists(model_file):
         checkpoint = torch.load(model_file)
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        start_epoch = checkpoint['epoch']
+        start_epoch = checkpoint['epoch'] + 1
 
     return start_epoch
 
