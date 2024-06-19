@@ -17,13 +17,13 @@ from torch.optim import lr_scheduler
 from torch.utils.tensorboard import SummaryWriter
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-from src.dl_based.dataset import get_dataset_train_val_test, get_dataset_external_test
-from src.dl_based.Model2D import get_model
-from src.utils.util import get_logger
-from src.utils.AverageMeter import AverageMeter
-from src.utils.util4torch import get_device, net2device, save_checkpoint, resume_checkpoint
-from src.config import CHECKPOINT_DIR, classes
-from src.utils.SensitivitySpecificityStatistics import SensitivitySpecificityStatistics
+from classification.dl_based.dataset import get_dataset_train_val_test, get_dataset_external_test, get_dataset_train_val_test_ext
+from classification.dl_based.Model2D import get_model
+from classification.utils.util import get_logger
+from classification.utils.AverageMeter import AverageMeter
+from classification.utils.util4torch import get_device, net2device, save_checkpoint, resume_checkpoint
+from classification.config import CHECKPOINT_DIR, classes, is_train_with_external_data
+from classification.utils.SensitivitySpecificityStatistics import SensitivitySpecificityStatistics
 
 
 def train_config(config, train_ds, val_ds, checkpoint_dir):
@@ -100,7 +100,7 @@ def train_config(config, train_ds, val_ds, checkpoint_dir):
         info = f'Epoch: [{epoch}/{num_epochs}, val loss: {val_loss.avg: .4f}, val acc: {val_acc.avg: .4f}'
         logger.info(info)
 
-        writer.add_scalars("Loss",{'train': train_loss.avg, 'val': val_loss.avg}, epoch)
+        writer.add_scalars("Loss", {'train': train_loss.avg, 'val': val_loss.avg}, epoch)
         writer.add_scalar("Accuracy/val", val_acc.avg, epoch)
         writer.flush()
 
@@ -199,17 +199,22 @@ def analyze_log(log_path):
     plt.legend()
 
 
-def main():
-    CHECKPOINT_DIR_NORMAL = os.path.join(CHECKPOINT_DIR, 'normal')
+def main(is_train_with_external_data=True):
+    CHECKPOINT_DIR_NORMAL = os.path.join(CHECKPOINT_DIR,
+                                         'normal_train_with_external_data' if is_train_with_external_data else 'normal_train_without_external_data')
     os.makedirs(CHECKPOINT_DIR_NORMAL, exist_ok=True)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
     log_file = os.path.join(CHECKPOINT_DIR_NORMAL, f'{timestamp}.log')
     logger = get_logger(name='clinical', log_file=log_file, log_level='INFO')
 
-    train_ds, val_ds, test_ds = get_dataset_train_val_test()
+    if is_train_with_external_data:
+        train_ds, val_ds, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext()
+    else:
+        train_ds, val_ds, test_int_ds = get_dataset_train_val_test()
+        test_ext_ds = get_dataset_external_test()
     logger.info(
-        f"length of train {len(train_ds)}, length of val {len(val_ds)}, length of test {len(test_ds)}")
+        f"length of train {len(train_ds)}, length of val {len(val_ds)}, length of internal test {len(test_int_ds)}, length of external test {len(test_ext_ds)}")
 
     config = {
         "lr": 0.001,
@@ -217,7 +222,7 @@ def main():
         "batch_size": 32,
         "fix_depth": 1,
         "backbone": 'resnet18',
-        "num_epochs": 100,
+        "num_epochs": 20,
     }
     logger.info(f"hyperparameter is {config}")
 
@@ -227,18 +232,17 @@ def main():
     net2device(net)
     net.load_state_dict(torch.load(os.path.join(CHECKPOINT_DIR_NORMAL, 'best.pth')))
 
-    truth, probs = infer_each_class(net, test_ds, classes)
+    truth, probs = infer_each_class(net, test_int_ds, classes)
     SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test')
 
-    external_test_ds = get_dataset_external_test()
-    truth, probs = infer_each_class(net, external_test_ds, classes)
+    truth, probs = infer_each_class(net, test_ext_ds, classes)
     SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test')
 
 
 if __name__ == '__main__':
-    # main()
+    main(is_train_with_external_data)
 
-    # plot train/val loss to get optimal num_epochs, I recommend you play tensorboard with more functions.
-    analyze_log(os.path.join(CHECKPOINT_DIR, 'normal'))
+    # # plot train/val loss to get optimal num_epochs, I recommend you play tensorboard with more functions.
+    # analyze_log(os.path.join(CHECKPOINT_DIR, 'normal'))
 
     plt.show()

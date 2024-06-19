@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
-from functools import partial
 import os
 import time
-from pathlib import Path
 import json
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -16,10 +14,10 @@ import ray
 from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 
-from src.utils.AverageMeter import AverageMeter
-from src.utils.util4raytune import resume_checkpoint, save_checkpoint
-from src.config import CHECKPOINT_DIR, RAYTUNE
-from src.dl_based.solver import (get_device,
+from classification.utils.AverageMeter import AverageMeter
+from classification.utils.util4raytune import resume_checkpoint, save_checkpoint
+from classification.config import CHECKPOINT_DIR, RAYTUNE, is_train_with_external_data
+from classification.dl_based.solver import (get_device,
                                  net2device,
                                  get_dataset_train_val_test,
                                  get_dataset_external_test,
@@ -31,8 +29,8 @@ from src.dl_based.solver import (get_device,
                                  resume_checkpoint as _resume_checkpoint
                                  )
 
-from src.utils.util import get_logger
-from src.dl_based.dataset import get_dataset_train_test
+from classification.utils.util import get_logger
+from classification.dl_based.dataset import get_dataset_train_val_test_ext
 
 # below imports are used to print out pretty pandas dataframes
 pd.set_option('display.max_columns', None)
@@ -50,7 +48,10 @@ def train_config(config):
     optim = config["optimizer"]
     num_epochs = config["num_epochs"]
 
-    train_ds, val_ds, _ = get_dataset_train_val_test()
+    if is_train_with_external_data:
+        train_ds, val_ds, _, _ = get_dataset_train_val_test_ext()
+    else:
+        train_ds, val_ds, _ = get_dataset_train_val_test()
     trainloader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=8)
     valloader = DataLoader(val_ds, batch_size=batch_size, shuffle=True, num_workers=8)
 
@@ -223,7 +224,7 @@ def search_optimal_tunebohb(num_samples, cpus_per_trial=4, gpus_per_trial=1):
 
     param_space = {
         "backbone": 'resnet18',
-        "fix_depth": tune.choice([1, 2, 3]),
+        "fix_depth": tune.choice([1, 2]),
         "optimizer": "Adam",
         "lr": tune.loguniform(1e-4, 1e-2),
         "weight_decay": tune.uniform(1e-4, 1e-3),
@@ -418,14 +419,18 @@ def tune_hyperparameter():
         json.dump(best_trial.config, ftxt, indent=4)
     config = json.loads(open(config_file).read())
 
+    if is_train_with_external_data:
+        _, _, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext()
+    else:
+        _, _, test_int_ds = get_dataset_train_val_test()
+        test_ext_ds = get_dataset_external_test()
+
     # internal test
-    _, _, test_ds = get_dataset_train_val_test()
-    truth, probs = infer_each_class(best_trained_model, test_ds, classes)
+    truth, probs = infer_each_class(best_trained_model, test_int_ds, classes)
     SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-subtrain')
 
     # external test
-    external_test_ds = get_dataset_external_test()
-    truth, probs = infer_each_class(best_trained_model, external_test_ds, classes)
+    truth, probs = infer_each_class(best_trained_model, test_ext_ds, classes)
     SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-subtrain')
 
 
@@ -499,8 +504,13 @@ def main():
     logger = get_logger(name='clinical', log_file=log_file, log_level='INFO')
     logger.info(f"hyperparameter is {config}")
 
-    train_ds, test_ds = get_dataset_train_test()
-    logger.info(f"length of train {len(train_ds)}, length of test {len(test_ds)}")
+    if is_train_with_external_data:
+        train_ds, _, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext(ratio_val=0)
+    else:
+        train_ds, _, test_int_ds = get_dataset_train_val_test()
+        test_ext_ds = get_dataset_external_test()
+    logger.info(
+        f"length of train {len(train_ds)}, length of val 0, length of internal test {len(test_int_ds)}, length of external test {len(test_ext_ds)}")
 
     train_with_best_hypermaters(config, train_ds, CHECKPOINT_DIR_BEST_HYPERPARA)
 
@@ -510,11 +520,10 @@ def main():
     net2device(net)
     net.load_state_dict(torch.load(os.path.join(CHECKPOINT_DIR_BEST_HYPERPARA, 'best.pth')))
 
-    truth, probs = infer_each_class(net, test_ds, classes)
+    truth, probs = infer_each_class(net, test_int_ds, classes)
     SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-dl')
 
-    external_test_ds = get_dataset_external_test()
-    truth, probs = infer_each_class(net, external_test_ds, classes)
+    truth, probs = infer_each_class(net, test_ext_ds, classes)
     SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-dl')
 
 

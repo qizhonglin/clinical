@@ -13,9 +13,9 @@ import warnings
 warnings.filterwarnings("ignore")
 
 from dataset import get_train_test_from_excel, get_external_test_from_excel
-from src.config import CHECKPOINT_DIR, classes
-from src.utils.SensitivitySpecificityStatistics import SensitivitySpecificityStatistics
-from src.utils.util4sklearn import summarize_results, infer_each_class
+from classification.config import CHECKPOINT_DIR, classes
+from classification.utils.SensitivitySpecificityStatistics import SensitivitySpecificityStatistics
+from classification.utils.util4sklearn import summarize_results, infer_each_class
 
 
 def search_optimal(model, space, X_train, y_train, optimize_mode="GridSearchCV"):

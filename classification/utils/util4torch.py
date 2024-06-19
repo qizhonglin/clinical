@@ -5,7 +5,7 @@ import os
 import torch
 import torch.nn as nn
 
-from src.utils.util import symlink
+from classification.utils.util import symlink
 
 def get_device():
     return "cuda:0" if torch.cuda.is_available() else "cpu"

@@ -2,7 +2,7 @@
 import os.path
 from sklearn.model_selection import train_test_split
 
-from src.config import DATA_DIR, EXTERNAL_DATA_DIR, classes, random_seed
+from classification.config import DATA_DIR, EXTERNAL_DATA_DIR, classes, random_seed
 
 
 def get_data(data_dir=EXTERNAL_DATA_DIR):
@@ -24,18 +24,24 @@ def get_data(data_dir=EXTERNAL_DATA_DIR):
     return images, labels
 
 
-def split_train_test(data_dir):
+def split_train_val_test(data_dir=DATA_DIR, ratio_test=0.2, ratio_val=0.25):
+    """
+
+    :param data_dir:
+    :param ratio_test: test size with ratio_test * len(data), 20% dataset by default
+    :param ratio_val: val size with ratio_val * (1-ratio_test) * len(data), 25%*80% = 20% dataset by default
+    :return:
+    """
     images, labels = get_data(data_dir)
 
-    X_train, X_test, y_train, y_test = train_test_split(images, labels, test_size=0.2, random_state=random_seed,
+    X_train, X_test, y_train, y_test = train_test_split(images, labels, test_size=ratio_test, random_state=random_seed,
                                                         shuffle=True, stratify=labels)
 
-    return (X_train, y_train), (X_test, y_test)
-
-def split_train_val_test(data_dir=DATA_DIR, ratio_val=0.25):
-    (X_train, y_train), (X_test, y_test) = split_train_test(data_dir)
-    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=ratio_val, random_state=random_seed,
-                                                      shuffle=True, stratify=y_train)  # 0.25 x 0.8 = 0.2
+    X_val = []
+    y_val = []
+    if ratio_val > 0:
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=ratio_val, random_state=random_seed,
+                                                          shuffle=True, stratify=y_train)  # 0.25 x 0.8 = 0.2
 
     return (X_train, y_train), (X_val, y_val), (X_test, y_test)
 
@@ -49,4 +55,10 @@ if __name__ == '__main__':
     assert set(X_test) == set(X_test1)
     empty = set(X_train).intersection(X_val).intersection(X_test)
     assert not empty
+
+    (X_train, y_train), (X_val, y_val), (X_test, y_test) = split_train_val_test(ratio_val=0)
+    assert not X_val and not y_val
+
+    images, labels = get_data(data_dir=EXTERNAL_DATA_DIR)
+    print(images)
 

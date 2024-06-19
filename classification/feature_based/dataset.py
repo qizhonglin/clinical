@@ -5,9 +5,9 @@ import numpy as np
 import pandas as pd
 from pprint import pprint
 
-from src.config import DATA_ROOT, DATA_DIR, classes, EXTERNAL_DATA_DIR
-from src.split_data import split_train_test, get_data
-from src.utils.preprocess import preprocess_numeric, preprocess_category
+from classification.config import DATA_ROOT, DATA_DIR, classes, EXTERNAL_DATA_DIR
+from classification.split_data import split_train_test, get_data
+from classification.utils.preprocess import preprocess_numeric, preprocess_category
 
 # below imports are used to print out pretty pandas dataframes
 pd.set_option('display.max_columns', None)
