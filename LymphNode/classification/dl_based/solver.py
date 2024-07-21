@@ -17,21 +17,25 @@ from torch.optim import lr_scheduler
 from torch.utils.tensorboard import SummaryWriter
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-from classification.dl_based.dataset import get_dataset_train_val_test, get_dataset_external_test, get_dataset_train_val_test_ext
-from classification.dl_based.Model2D import get_model
-from classification.utils.util import get_logger
-from classification.utils.AverageMeter import AverageMeter
-from classification.utils.util4torch import get_device, net2device, save_checkpoint, resume_checkpoint
-from classification.config import CHECKPOINT_DIR, classes, is_train_with_external_data
-from classification.utils.SensitivitySpecificityStatistics import SensitivitySpecificityStatistics
+from LymphNode.classification.dl_based.dataset import (
+    DATA_DIR,
+    EXTERNAL_DATA_DIR,
+    get_dataset_train_val_test,
+    get_dataset_external_test,
+    get_dataset_train_val_test_ext,
+    split_train_val_test,
+    get_data,
+    split_train_val_test_ext)
+from LymphNode.classification.dl_based.Model2D import get_model
+from utils.util import get_logger
+from utils.AverageMeter import AverageMeter
+from utils.util4torch import get_device, net2device, save_checkpoint, resume_checkpoint
+from LymphNode.config import CHECKPOINT_DIR, classes, is_train_with_external_data
+from utils.SensitivitySpecificityStatistics import SensitivitySpecificityStatistics
 
 
 def train_config(config, train_ds, val_ds, checkpoint_dir):
-    lr = config["lr"]
     batch_size = int(config["batch_size"])
-    weight_decay = config["weight_decay"]
-    fix_depth = config["fix_depth"]
-    backbone = config["backbone"]
     num_epochs = config["num_epochs"]
 
     logger = get_logger(name='clinical')
@@ -40,13 +44,13 @@ def train_config(config, train_ds, val_ds, checkpoint_dir):
     trainloader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=8)
     valloader = DataLoader(val_ds, batch_size=batch_size, shuffle=True, num_workers=8)
 
-    net = get_model(fix_depth, backbone, len(classes))
+    net = get_model(config["fix_depth"], config["backbone"], len(classes), config["drop_out"], config["hidden_dim"])
     net2device(net)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(
+    optimizer = getattr(torch.optim, config["optimizer"])(
         filter(lambda p: p.requires_grad, net.parameters()),
-        lr=lr, weight_decay=weight_decay)
+        lr=config["lr"], weight_decay=config["weight_decay"])
     scheduler = lr_scheduler.MultiStepLR(optimizer, [int(num_epochs * 0.8)], gamma=0.1)
 
     start_epoch = resume_checkpoint(net, optimizer, checkpoint_dir=checkpoint_dir)
@@ -120,6 +124,7 @@ def infer_each_class(net, test_ds, classes):
 
     testloader = DataLoader(test_ds, batch_size=32, shuffle=False, num_workers=8)
 
+    net.eval()
     truth = []
     probs = []
     with torch.no_grad():
@@ -209,34 +214,41 @@ def main(is_train_with_external_data=True):
     logger = get_logger(name='clinical', log_file=log_file, log_level='INFO')
 
     if is_train_with_external_data:
-        train_ds, val_ds, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext()
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+        train_ds, val_ds, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext(data)
     else:
-        train_ds, val_ds, test_int_ds = get_dataset_train_val_test()
-        test_ext_ds = get_dataset_external_test()
+        data = split_train_val_test(DATA_DIR)
+        train_ds, val_ds, test_int_ds = get_dataset_train_val_test(data)
+        test_ext_ds = get_dataset_external_test(*get_data(EXTERNAL_DATA_DIR))
     logger.info(
         f"length of train {len(train_ds)}, length of val {len(val_ds)}, length of internal test {len(test_int_ds)}, length of external test {len(test_ext_ds)}")
 
     config = {
+        "backbone": 'resnet18',
+        "fix_depth": 1,
+        "optimizer": "Adam",
         "lr": 0.001,
         "weight_decay": 1e-4,
+        "drop_out": 0.5,
+        "hidden_dim": 0,
         "batch_size": 32,
-        "fix_depth": 1,
-        "backbone": 'resnet18',
-        "num_epochs": 20,
+        "num_epochs": 20
     }
     logger.info(f"hyperparameter is {config}")
 
     train_config(config, train_ds, val_ds, CHECKPOINT_DIR_NORMAL)
 
-    net = get_model(config["fix_depth"], config["backbone"], len(classes))
+    net = get_model(config["fix_depth"], config["backbone"], len(classes), config["drop_out"], config["hidden_dim"])
     net2device(net)
     net.load_state_dict(torch.load(os.path.join(CHECKPOINT_DIR_NORMAL, 'best.pth')))
 
     truth, probs = infer_each_class(net, test_int_ds, classes)
-    SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test')
+    if len(classes) == 2:
+        SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-subtrain')
 
     truth, probs = infer_each_class(net, test_ext_ds, classes)
-    SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test')
+    if len(classes) == 2:
+        SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-subtrain')
 
 
 if __name__ == '__main__':

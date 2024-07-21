@@ -2,6 +2,10 @@
 
 import os
 
+from LymphNode.config import DATA_ROOT as root
+
+
+
 issues = [
     "5485110",
     "6169843",
@@ -21,8 +25,6 @@ issues = [
 ]
 
 def main():
-    from src.config import DATA_ROOT as root
-
     for group in ['huaxi', 'tianfu']:
         dir_images = os.path.join(root, group, "images")
         dir_masks = os.path.join(root, group, "masks")

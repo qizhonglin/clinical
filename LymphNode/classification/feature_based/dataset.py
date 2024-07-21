@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 import os
 
-import numpy as np
 import pandas as pd
 from pprint import pprint
 
-from classification.config import DATA_ROOT, DATA_DIR, classes, EXTERNAL_DATA_DIR
-from classification.split_data import split_train_test, get_data
-from classification.utils.preprocess import preprocess_numeric, preprocess_category
+from LymphNode.config import DATA_ROOT, DATA_DIR, classes, EXTERNAL_DATA_DIR
+from LymphNode.clean_data.split_data import split_train_val_test, get_data
+from utils.preprocess import preprocess_numeric, preprocess_category
 
 # below imports are used to print out pretty pandas dataframes
 pd.set_option('display.max_columns', None)
@@ -93,9 +92,9 @@ def compare_images_excel(data_dir, tabelfile):
 
 
 def _get_train_test_from_excel(data_dir, tabelfile):
-    (X_train, y_train), (X_test, y_test) = split_train_test(data_dir)
-    ID_train = [os.path.splitext(os.path.basename(file))[0] for file in X_train]
-    ID_test = [os.path.splitext(os.path.basename(file))[0] for file in X_test]
+    data = split_train_val_test(data_dir, ratio_val=0)
+    ID_train = [os.path.splitext(os.path.basename(file))[0] for file in data["X_train"]]
+    ID_test = [os.path.splitext(os.path.basename(file))[0] for file in data["X_test"]]
 
     df = load_excel(tabelfile)
     IDs = df[ID_NAME].values.tolist()

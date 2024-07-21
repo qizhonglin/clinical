@@ -3,6 +3,8 @@ import cv2
 import numpy as np
 import os
 
+from LymphNode.config import DATA_ROOT as root
+
 print(cv2.__version__)
 
 
@@ -63,8 +65,6 @@ def cvt_mask_contour(image_file, mask_file, contour_file):
 
 
 def main():
-    from src.config import DATA_ROOT as root
-
     for group in ['huaxi', 'tianfu']:
         dir_images = os.path.join(root, group, "images")
         dir_masks = os.path.join(root, group, "masks")

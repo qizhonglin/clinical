@@ -5,12 +5,36 @@ import torchvision.models as models
 from torchvision.models.resnet import ResNet18_Weights
 
 
-def get_model(fix_depth=1, backbone='resnet18', n_class=2):
+class Classifier(nn.Module):
+    def __init__(self, num_ftrs, n_class, drop_out=0.5, hidden_dim=8):
+        super(Classifier, self).__init__()
+        self.classifier = nn.Sequential(
+            nn.Linear(num_ftrs, hidden_dim),
+            nn.Tanh(),
+            nn.Dropout(p=drop_out),
+            nn.Linear(hidden_dim, n_class),
+        )
+
+    def forward(self, x):
+        return self.classifier(x)
+
+
+def get_model(fix_depth=1, backbone='resnet18', n_class=2, drop_out=0.5, hidden_dim=8):
+    """
+
+    :param fix_depth: choice from range(1, 6)
+    :param backbone: [resnet18, resnet34, resnet50, resnet101, resnet152, resnext50_32x4d, resnext101_32x8d, wide_resnet50_2, wide_resnet101_2,
+                        inception_v3, vgg11_bn, vgg13_bn, vgg16_bn]
+    :param n_class: output number
+    :param drop_out: in (0, 1), invalid if hidden_dim is 0
+    :param hidden_dim: if 0 then no hidden layer
+    :return:
+    """
+
     """
 
     :param n_class:
-    :param backbone: [resnet18, resnet34, resnet50, resnet101, resnet152, resnext50_32x4d, resnext101_32x8d, wide_resnet50_2, wide_resnet101_2,
-                        inception_v3, vgg11_bn, vgg13_bn, vgg16_bn]
+    :param backbone: 
     :param fix_depth:
     :return:
     """
@@ -29,12 +53,18 @@ def get_model(fix_depth=1, backbone='resnet18', n_class=2):
     # change classifier
     if 'resnet' in backbone or 'inception' in backbone:
         num_ftrs = model.fc.in_features
-        model.fc = nn.Linear(num_ftrs, n_class)
+        if hidden_dim == 0:
+            model.fc = nn.Linear(num_ftrs, n_class)
+        else:
+            model.fc = Classifier(num_ftrs, n_class, drop_out, hidden_dim)
     if 'vgg' in backbone:
         for idx, (key, value) in enumerate(model.classifier._modules.items()):
             if idx == len(model.classifier._modules) - 1:
                 num_ftrs = model.classifier._modules[key].in_features
-                model.classifier._modules[key] = nn.Linear(num_ftrs, n_class)
+                if hidden_dim == 0:
+                    model.classifier._modules[key] = nn.Linear(num_ftrs, n_class)
+                else:
+                    model.classifier._modules[key] = Classifier(num_ftrs, n_class, drop_out, hidden_dim)
 
     return model
 

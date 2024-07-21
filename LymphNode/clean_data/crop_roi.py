@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import cv2 as cv
-import numpy as np
 import os
+
+from LymphNode.config import DATA_ROOT as root
 
 print(cv.__version__)
 
@@ -34,8 +35,6 @@ def crop_roi(image_file, mask_file, roi_file, margin=0.5):
 
 
 def main():
-    from src.config import DATA_ROOT as root
-
     for group in ['huaxi', 'tianfu']:
         dir_images = os.path.join(root, group, "images")
         dir_masks = os.path.join(root, group, "masks")

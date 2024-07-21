@@ -4,7 +4,6 @@ import os
 from PIL import Image, ImageOps
 import matplotlib.pyplot as plt
 import numpy as np
-import random
 from sklearn.model_selection import train_test_split
 
 import torchvision
@@ -13,9 +12,10 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 import torch
 
-from classification.config import DATA_DIR
-from classification.split_data import split_train_val_test, get_data
-from classification.config import EXTERNAL_DATA_DIR, classes, random_seed
+from LymphNode.config import DATA_DIR, EXTERNAL_DATA_DIR, classes, random_seed
+from LymphNode.clean_data.split_data import split_train_val_test, get_data, split_train_val_test_ext
+from transform import RandomCenterCrop, RandomTopCrop
+
 
 class CustomImageDataset(Dataset):
     def __init__(self, images, labels, transform=None, target_transform=None):
@@ -42,18 +42,6 @@ class CustomImageDataset(Dataset):
         return image, label
 
 
-class RandomCenterCrop(object):
-    def __init__(self, margin_ratio=0.5 / 4):
-        self.margin_ratio = margin_ratio
-
-    def __call__(self, tensor):
-        _, h, w = tensor.shape
-        x1 = random.randint(0, int(self.margin_ratio * w))
-        y1 = random.randint(0, int(self.margin_ratio * h))
-        cropped = tensor[:, y1:h - y1, x1:w - x1]
-        return cropped
-
-
 def train_transform(im_h, im_w):
     transform_list = [
         transforms.ToTensor(),      # will normalize to (0, 1) by divided 255
@@ -63,8 +51,14 @@ def train_transform(im_h, im_w):
         transforms.RandomVerticalFlip(),
         transforms.RandomHorizontalFlip(),
 
+        # # for echo
+        # transforms.RandomRotation(45),
+        # RandomTopCrop(),
+        # transforms.Resize((im_h, im_w)),
+
+        # for lesion in the center of image
         transforms.RandomRotation(45),
-        # transforms.RandomCenterCrop(),
+        # RandomCenterCrop(),
         transforms.Resize((im_h, im_w)),
 
         # transforms.RandomResizedCrop((im_h, im_w), scale=(1 / 4, 1.0)),
@@ -88,78 +82,46 @@ def val_transform(im_h, im_w):
     return transforms.Compose(transform_list)
 
 
-"""
-get train from 60% DATA_DIR
-get val from 20% DATA_DIR
-get internal test from 20% DATA_DIR
-get external test from 100% EXTERNAL_DATA_DIR
-"""
-def get_dataset_train_val_test(data_dir=DATA_DIR, ratio_val=0.25):
-    (X_train, y_train), (X_val, y_val), (X_test, y_test) = split_train_val_test(data_dir, ratio_val=ratio_val)
 
+def get_dataset_train_val_test(data):
     image_size = 224
     transform_train = train_transform(image_size, image_size)
     transform_val = val_transform(image_size, image_size)
 
-    train_ds = CustomImageDataset(X_train, y_train, transform=transform_train)
-    val_ds = CustomImageDataset(X_val, y_val, transform=transform_val)
-    test_ds = CustomImageDataset(X_test, y_test, transform=transform_val)
+    train_ds = CustomImageDataset(data["X_train"], data["y_train"], transform=transform_train)
+    val_ds = CustomImageDataset(data["X_val"], data["y_val"], transform=transform_val)
+    test_ds = CustomImageDataset(data["X_test"], data["y_test"], transform=transform_val)
 
     return train_ds, val_ds, test_ds
 
 
-def get_dataset_external_test(data_dir=EXTERNAL_DATA_DIR):
-    X_test, y_test = get_data(data_dir)
-
+def get_dataset_external_test(images, labels):
     image_size = 224
     transform_val = val_transform(image_size, image_size)
 
-    test_ds = CustomImageDataset(X_test, y_test, transform=transform_val)
+    test_ds = CustomImageDataset(images, labels, transform=transform_val)
 
     return test_ds
 
 
-"""
-get train from 60% DATA_DIR and train 50% from EXTERNAL_DATA_DIR
-get val from 20% DATA_DIR and 50% EXTERNAL_DATA_DIR
-get internal test from 20% DATA_DIR
-get external test from 50% EXTERNAL_DATA_DIR
-"""
-def get_dataset_train_val_test_ext(data_dir=DATA_DIR, ratio_val=0.25):
-    (X_train, y_train), (X_val, y_val), (X_test_int, y_test_int) = split_train_val_test(data_dir, ratio_val=ratio_val)
-
-    X_test_ext, y_test_ext = get_data(EXTERNAL_DATA_DIR)
-    X_train_ext, X_test_ext, y_train_ext, y_test_ext = train_test_split(X_test_ext, y_test_ext,
-                                                                        test_size=0.5, random_state=random_seed,
-                                                        shuffle=True, stratify=y_test_ext)
-
-    if ratio_val > 0:
-        X_train_ext, X_val_ext, y_train_ext, y_val_ext = train_test_split(X_train_ext, y_train_ext, test_size=0.5,
-                                                                            random_state=random_seed,
-                                                                            shuffle=True, stratify=y_train_ext)
-        X_val.extend(X_val_ext)
-        y_val.extend(y_val_ext)
-
-    X_train.extend(X_train_ext)
-    y_train.extend(y_train_ext)
-
-
+def get_dataset_train_val_test_ext(data):
     image_size = 224
     transform_train = train_transform(image_size, image_size)
     transform_val = val_transform(image_size, image_size)
 
-    train_ds = CustomImageDataset(X_train, y_train, transform=transform_train)
-    val_ds = CustomImageDataset(X_val, y_val, transform=transform_val)
-    test_int_ds = CustomImageDataset(X_test_int, y_test_int, transform=transform_val)
-    test_ext_ds = CustomImageDataset(X_test_ext, y_test_ext, transform=transform_val)
+    train_ds = CustomImageDataset(data["X_train"], data["y_train"], transform=transform_train)
+    val_ds = CustomImageDataset(data["X_val"], data["y_val"], transform=transform_val)
+    test_int_ds = CustomImageDataset(data["X_test_int"], data["y_test_int"], transform=transform_val)
+    test_ext_ds = CustomImageDataset(data["X_test_ext"], data["y_test_ext"], transform=transform_val)
 
     return train_ds, val_ds, test_int_ds, test_ext_ds
 
 
 
 if __name__ == '__main__':
-    train_ds, val_ds, test_int_ds = get_dataset_train_val_test()
-    test_ext_ds = get_dataset_external_test()
+    data = split_train_val_test(DATA_DIR)
+    train_ds, val_ds, test_int_ds = get_dataset_train_val_test(data)
+    test_ext_ds = get_dataset_external_test(*get_data(EXTERNAL_DATA_DIR))
     info = {
         'ratio_val': 0.2,
         'all': len(train_ds) + len(val_ds) + len(test_int_ds) + len(test_ext_ds),
@@ -169,8 +131,9 @@ if __name__ == '__main__':
         'external test': len(test_ext_ds)
     }
     print(info)
-    train_ds, val_ds, test_int_ds = get_dataset_train_val_test(ratio_val=0)
-    test_ext_ds = get_dataset_external_test()
+    data = split_train_val_test(DATA_DIR, ratio_val=0)
+    train_ds, val_ds, test_int_ds = get_dataset_train_val_test(data)
+    test_ext_ds = get_dataset_external_test(*get_data(EXTERNAL_DATA_DIR))
     info = {
         'ratio_val': 0,
         'all': len(train_ds) + len(val_ds) + len(test_int_ds) + len(test_ext_ds),
@@ -181,7 +144,8 @@ if __name__ == '__main__':
     }
     print(info)
 
-    train_ds, val_ds, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext()
+    data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    train_ds, val_ds, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext(data)
     info = {
         'ratio_val': 0.2,
         'all': len(train_ds) + len(val_ds) + len(test_int_ds) + len(test_ext_ds),
@@ -192,7 +156,8 @@ if __name__ == '__main__':
     }
     print(info)
 
-    train_ds, val_ds, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext(ratio_val=0)
+    data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR, ratio_val=0)
+    train_ds, val_ds, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext(data)
     info = {
         'ratio_val': 0,
         'all': len(train_ds) + len(val_ds) + len(test_int_ds) + len(test_ext_ds),

@@ -4,7 +4,7 @@ import time
 import json
 import matplotlib.pyplot as plt
 import pandas as pd
-
+from functools import partial
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -14,23 +14,29 @@ import ray
 from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 
-from classification.utils.AverageMeter import AverageMeter
-from classification.utils.util4raytune import resume_checkpoint, save_checkpoint
-from classification.config import CHECKPOINT_DIR, RAYTUNE, is_train_with_external_data
-from classification.dl_based.solver import (get_device,
-                                 net2device,
-                                 get_dataset_train_val_test,
-                                 get_dataset_external_test,
-                                 classes,
-                                 get_model,
-                                 infer_each_class,
-                                 SensitivitySpecificityStatistics,
-                                 save_checkpoint as _save_checkpoint,
-                                 resume_checkpoint as _resume_checkpoint
-                                 )
-
-from classification.utils.util import get_logger
-from classification.dl_based.dataset import get_dataset_train_val_test_ext
+from utils.util import get_logger
+from utils.AverageMeter import AverageMeter
+from utils.util4raytune import resume_checkpoint, save_checkpoint
+from LymphNode.config import CHECKPOINT_DIR, RAYTUNE, is_train_with_external_data
+from LymphNode.classification.dl_based.solver import (
+    get_device,
+    net2device,
+    get_dataset_train_val_test,
+    get_dataset_external_test,
+    split_train_val_test_ext,
+    split_train_val_test,
+    get_data,
+    DATA_DIR,
+    EXTERNAL_DATA_DIR,
+    classes,
+    get_model,
+    infer_each_class,
+    SensitivitySpecificityStatistics,
+    save_checkpoint as _save_checkpoint,
+    resume_checkpoint as _resume_checkpoint
+)
+from LymphNode.classification.dl_based.dataset import get_dataset_train_val_test_ext
+from LymphNode.config import DATA_DIR
 
 # below imports are used to print out pretty pandas dataframes
 pd.set_option('display.max_columns', None)
@@ -39,34 +45,36 @@ pd.set_option('max_colwidth', 100)
 pd.set_option('display.width', 1024)  # console defaults to 80 characters
 
 
-def train_config(config):
-    lr = config["lr"]
+def template_train_config(config, data):
     batch_size = int(config["batch_size"])
-    weight_decay = config["weight_decay"]
-    fix_depth = config["fix_depth"]
-    backbone = config["backbone"]
-    optim = config["optimizer"]
     num_epochs = config["num_epochs"]
 
     if is_train_with_external_data:
-        train_ds, val_ds, _, _ = get_dataset_train_val_test_ext()
+        train_ds, val_ds, _, _ = get_dataset_train_val_test_ext(data)
     else:
-        train_ds, val_ds, _ = get_dataset_train_val_test()
+        train_ds, val_ds, _ = get_dataset_train_val_test(data)
+    info = {
+        'train num': len(train_ds),
+        'val num': len(val_ds),
+        'val': [img.replace(DATA_DIR, "") for img in val_ds.images]
+    }
+    print(info)
     trainloader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=8)
     valloader = DataLoader(val_ds, batch_size=batch_size, shuffle=True, num_workers=8)
 
-    net = get_model(fix_depth, backbone, len(classes))
+    net = get_model(config["fix_depth"], config["backbone"], len(classes), config["drop_out"], config["hidden_dim"])
     net2device(net)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = getattr(torch.optim, optim)(
+    optimizer = getattr(torch.optim, config["optimizer"])(
         filter(lambda p: p.requires_grad, net.parameters()),
-        lr=lr, weight_decay=weight_decay)
+        lr=config["lr"], weight_decay=config["weight_decay"])
     scheduler = lr_scheduler.MultiStepLR(optimizer, [int(num_epochs * 0.8)], gamma=0.1)
 
     start_epoch = resume_checkpoint(net, optimizer)
-    for epoch in range(start_epoch, num_epochs+1):  # loop over the dataset multiple times
+    for epoch in range(start_epoch, num_epochs + 1):  # loop over the dataset multiple times
 
+        net.train()
         train_loss = AverageMeter()
         for i, (inputs, labels) in enumerate(trainloader, 0):
             inputs, labels = inputs.to(get_device()), labels.to(get_device())
@@ -90,6 +98,7 @@ def train_config(config):
         scheduler.step()
 
         # Validation loss
+        net.eval()
         val_loss = AverageMeter()
         val_acc = AverageMeter()
         for i, (inputs, labels) in enumerate(valloader, 0):
@@ -114,16 +123,13 @@ def train_config(config):
     print("Finished Training")
 
 
-def search_optimal_grid(num_samples, cpus_per_trial=4, gpus_per_trial=1, scheduler=ASHAScheduler()):
-    param_space = {
-        "backbone": 'resnet18',
-        "fix_depth": tune.grid_search([1, 2, 3]),
-        "optimizer": "Adam",
-        "lr": tune.grid_search([0.01, 0.001, 0.0001]),
-        "weight_decay": 1e-4,
-        "batch_size": 16,
-        "num_epochs": 20
-    }
+def search_optimal_grid(param_space, num_samples, cpus_per_trial=4, gpus_per_trial=1, scheduler=ASHAScheduler()):
+    if is_train_with_external_data:
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    else:
+        data = split_train_val_test(DATA_DIR)
+    train_config = partial(template_train_config, data=data)
+
     tuner = tune.Tuner(
         tune.with_resources(train_config, {"cpu": cpus_per_trial, "gpu": gpus_per_trial}),
         param_space=param_space,
@@ -143,17 +149,8 @@ def search_optimal_grid(num_samples, cpus_per_trial=4, gpus_per_trial=1, schedul
     return result_grid
 
 
-def search_optimal_hyperopt(num_samples, cpus_per_trial=4, gpus_per_trial=1, scheduler=ASHAScheduler()):
+def search_optimal_hyperopt(param_space, num_samples, cpus_per_trial=4, gpus_per_trial=1, scheduler=ASHAScheduler()):
     from ray.tune.search.hyperopt import HyperOptSearch
-    param_space = {
-        "backbone": 'resnet18',
-        "fix_depth": tune.choice([1, 2, 3]),
-        "optimizer": "Adam",
-        "lr": tune.loguniform(1e-4, 1e-2),
-        "weight_decay": tune.uniform(1e-4, 1e-3),
-        "batch_size": 16,
-        "num_epochs": 20
-    }
     initial_params = [
         {
             "backbone": 'resnet18',
@@ -161,11 +158,17 @@ def search_optimal_hyperopt(num_samples, cpus_per_trial=4, gpus_per_trial=1, sch
             "optimizer": "Adam",
             "lr": 1e-3,
             "weight_decay": 1e-4,
-            "batch_size": 16,
+            "drop_out": 0.5,
+            "hidden_dim": 8,
+            "batch_size": 32,
             "num_epochs": 20
         }
     ]
-    algo = HyperOptSearch(points_to_evaluate=initial_params)
+    if is_train_with_external_data:
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    else:
+        data = split_train_val_test(DATA_DIR)
+    train_config = partial(template_train_config, data=data)
     tuner = tune.Tuner(
         tune.with_resources(train_config, {"cpu": cpus_per_trial, "gpu": gpus_per_trial}),
         param_space=param_space,
@@ -173,7 +176,7 @@ def search_optimal_hyperopt(num_samples, cpus_per_trial=4, gpus_per_trial=1, sch
             num_samples=num_samples,
             metric="val_acc",
             mode="max",
-            search_alg=algo,
+            search_alg=HyperOptSearch(points_to_evaluate=initial_params),
             scheduler=scheduler,
         ),
         run_config=ray.train.RunConfig(
@@ -192,12 +195,18 @@ def search_optimal_bayesopt(num_samples, cpus_per_trial=4, gpus_per_trial=1, sch
         "backbone": 'resnet18',
         "fix_depth": 1,
         "optimizer": "Adam",
-        "lr": tune.uniform(1e-4, 1e-2),
-        "weight_decay": tune.uniform(1e-4, 1e-3),
-        "batch_size": 16,
+        "lr": tune.loguniform(1e-4, 1e-2),
+        "weight_decay": tune.uniform(1e-4, 1e-2),
+        "drop_out": tune.uniform(0.1, 0.7),
+        "hidden_dim": 8,
+        "batch_size": 32,
         "num_epochs": 20
     }
-    algo = BayesOptSearch(utility_kwargs={"kind": "ucb", "kappa": 2.5, "xi": 0.0})
+    if is_train_with_external_data:
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    else:
+        data = split_train_val_test(DATA_DIR)
+    train_config = partial(template_train_config, data=data)
     tuner = tune.Tuner(
         tune.with_resources(train_config, {"cpu": cpus_per_trial, "gpu": gpus_per_trial}),
         param_space=param_space,
@@ -205,7 +214,7 @@ def search_optimal_bayesopt(num_samples, cpus_per_trial=4, gpus_per_trial=1, sch
             num_samples=num_samples,
             metric="val_acc",
             mode="max",
-            search_alg=algo,
+            search_alg=BayesOptSearch(utility_kwargs={"kind": "ucb", "kappa": 2.5, "xi": 0.0}),
             scheduler=scheduler
         ),
         run_config=ray.train.RunConfig(
@@ -218,21 +227,16 @@ def search_optimal_bayesopt(num_samples, cpus_per_trial=4, gpus_per_trial=1, sch
     return result_grid
 
 
-def search_optimal_tunebohb(num_samples, cpus_per_trial=4, gpus_per_trial=1):
+def search_optimal_tunebohb(param_space, num_samples, cpus_per_trial=4, gpus_per_trial=1):
     from ray.tune.schedulers.hb_bohb import HyperBandForBOHB
     from ray.tune.search.bohb import TuneBOHB
 
-    param_space = {
-        "backbone": 'resnet18',
-        "fix_depth": tune.choice([1, 2]),
-        "optimizer": "Adam",
-        "lr": tune.loguniform(1e-4, 1e-2),
-        "weight_decay": tune.uniform(1e-4, 1e-3),
-        "batch_size": 16,
-        "num_epochs": 20
-    }
-    algo = TuneBOHB()
-    scheduler = HyperBandForBOHB()
+    if is_train_with_external_data:
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    else:
+        data = split_train_val_test(DATA_DIR)
+    train_config = partial(template_train_config, data=data)
+
     tuner = tune.Tuner(
         tune.with_resources(train_config, {"cpu": cpus_per_trial, "gpu": gpus_per_trial}),
         param_space=param_space,
@@ -240,8 +244,8 @@ def search_optimal_tunebohb(num_samples, cpus_per_trial=4, gpus_per_trial=1):
             num_samples=num_samples,
             metric="val_acc",
             mode="max",
-            search_alg=algo,
-            scheduler=scheduler,
+            search_alg=TuneBOHB(),
+            scheduler=HyperBandForBOHB(),
         ),
         run_config=ray.train.RunConfig(
             storage_path=CHECKPOINT_DIR,
@@ -253,18 +257,14 @@ def search_optimal_tunebohb(num_samples, cpus_per_trial=4, gpus_per_trial=1):
     return result_grid
 
 
-def search_optimal_optuna(num_samples, cpus_per_trial=4, gpus_per_trial=1, scheduler=ASHAScheduler()):
+def search_optimal_optuna(param_space, num_samples, cpus_per_trial=4, gpus_per_trial=1, scheduler=ASHAScheduler()):
     from ray.tune.search.optuna import OptunaSearch
-    param_space = {
-        "backbone": 'resnet18',
-        "fix_depth": tune.choice([1, 2, 3]),
-        "optimizer": "Adam",
-        "lr": tune.loguniform(1e-4, 1e-2),
-        "weight_decay": tune.uniform(1e-4, 1e-3),
-        "batch_size": 16,
-        "num_epochs": 20
-    }
-    algo = OptunaSearch()
+
+    if is_train_with_external_data:
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    else:
+        data = split_train_val_test(DATA_DIR)
+    train_config = partial(template_train_config, data=data)
     tuner = tune.Tuner(
         tune.with_resources(train_config, {"cpu": cpus_per_trial, "gpu": gpus_per_trial}),
         param_space=param_space,
@@ -272,7 +272,7 @@ def search_optimal_optuna(num_samples, cpus_per_trial=4, gpus_per_trial=1, sched
             num_samples=num_samples,
             metric="val_acc",
             mode="max",
-            search_alg=algo,
+            search_alg=OptunaSearch(),
             scheduler=scheduler,
         ),
         run_config=ray.train.RunConfig(
@@ -285,22 +285,21 @@ def search_optimal_optuna(num_samples, cpus_per_trial=4, gpus_per_trial=1, sched
     return result_grid
 
 
-def search_optimal_pbt(num_samples, cpus_per_trial=4, gpus_per_trial=1):
+def search_optimal_pbt(param_space, num_samples, cpus_per_trial=4, gpus_per_trial=1):
     from ray.tune.schedulers import PopulationBasedTraining
-    param_space = {
-        "backbone": ['resnet18'],
-        "fix_depth": [1, 2, 3],
-        "optimizer": ["Adam"],
-        "lr": tune.loguniform(1e-4, 1e-2),
-        "weight_decay": tune.uniform(1e-4, 1e-3),
-        "batch_size": [16],
-        "num_epochs": [20]
-    }
+
+    if is_train_with_external_data:
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    else:
+        data = split_train_val_test(DATA_DIR)
+    train_config = partial(template_train_config, data=data)
+
     scheduler = PopulationBasedTraining(
         time_attr='training_iteration',
         perturbation_interval=1,
         hyperparam_mutations=param_space
     )
+
     tuner = tune.Tuner(
         tune.with_resources(train_config, {"cpu": cpus_per_trial, "gpu": gpus_per_trial}),
         tune_config=tune.TuneConfig(
@@ -319,19 +318,16 @@ def search_optimal_pbt(num_samples, cpus_per_trial=4, gpus_per_trial=1):
     return result_grid
 
 
-def search_optimal_nevergrad(num_samples, cpus_per_trial=4, gpus_per_trial=1, scheduler=ASHAScheduler()):
+def search_optimal_nevergrad(param_space, num_samples, cpus_per_trial=4, gpus_per_trial=1, scheduler=ASHAScheduler()):
     from ray.tune.search.nevergrad import NevergradSearch
     import nevergrad as ng
-    param_space = {
-        "backbone": 'resnet18',
-        "fix_depth": tune.choice([1, 2, 3]),
-        "optimizer": "Adam",
-        "lr": tune.loguniform(1e-4, 1e-2),
-        "weight_decay": tune.uniform(1e-4, 1e-3),
-        "batch_size": 16,
-        "num_epochs": 20
-    }
-    algo = NevergradSearch(optimizer=ng.optimizers.OnePlusOne)
+
+    if is_train_with_external_data:
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    else:
+        data = split_train_val_test(DATA_DIR)
+    train_config = partial(template_train_config, data=data)
+
     tuner = tune.Tuner(
         tune.with_resources(train_config, {"cpu": cpus_per_trial, "gpu": gpus_per_trial}),
         param_space=param_space,
@@ -339,7 +335,7 @@ def search_optimal_nevergrad(num_samples, cpus_per_trial=4, gpus_per_trial=1, sc
             num_samples=num_samples,
             metric="val_acc",
             mode="max",
-            search_alg=algo,
+            search_alg=NevergradSearch(optimizer=ng.optimizers.OnePlusOne),
             scheduler=scheduler,
         ),
         run_config=ray.train.RunConfig(
@@ -382,32 +378,49 @@ def analyze_experiment_results(result_grid):
 
 def tune_hyperparameter():
     from ray.tune.schedulers import ASHAScheduler
-    scheduler = ASHAScheduler()                         # prefer
+    scheduler = ASHAScheduler()  # prefer
 
     # from ray.tune.schedulers import AsyncHyperBandScheduler
     # scheduler = AsyncHyperBandScheduler()
     # from ray.tune.schedulers import HyperBandScheduler
     # scheduler = HyperBandScheduler()
 
-    result_grid = search_optimal_tunebohb(num_samples=8, cpus_per_trial=2, gpus_per_trial=2 / 4)            # prefer
-    # result_grid = search_optimal_hyperopt(num_samples=8, cpus_per_trial=2, gpus_per_trial=2/4)
+    param_space = {
+        "backbone": 'resnet18',
+        "fix_depth": tune.choice([1, 2, 3, 4]),
+        "optimizer": "Adam",
+        "lr": tune.loguniform(1e-4, 1e-2),
+        "weight_decay": tune.uniform(1e-4, 1e-2),
+        "drop_out": tune.uniform(0.1, 0.7),
+        "hidden_dim": tune.choice([0, 32, 64]),
+        "batch_size": 32,
+        "num_epochs": 20
+    }
+
+    result_grid = search_optimal_tunebohb(param_space, num_samples=40, cpus_per_trial=2, gpus_per_trial=2 / 4)  # prefer
+    # result_grid = search_optimal_hyperopt(param_space, num_samples=8, cpus_per_trial=2, gpus_per_trial=2/4)
     # result_grid = search_optimal_bayesopt(num_samples=8, cpus_per_trial=2, gpus_per_trial=2 / 4)
-    # result_grid = search_optimal_nevergrad(num_samples=8, cpus_per_trial=2, gpus_per_trial=2 / 4)
-    # result_grid = search_optimal_optuna(num_samples=8, cpus_per_trial=2, gpus_per_trial=2 / 4)
-    # result_grid = search_optimal_pbt(num_samples=8, cpus_per_trial=2, gpus_per_trial=2 / 4)
-    # result_grid = search_optimal_grid(num_samples=1, cpus_per_trial=2, gpus_per_trial=2/4)
+    # result_grid = search_optimal_nevergrad(param_space, num_samples=8, cpus_per_trial=2, gpus_per_trial=2 / 4)
+    # result_grid = search_optimal_optuna(param_space, num_samples=8, cpus_per_trial=2, gpus_per_trial=2 / 4)
+    # result_grid = search_optimal_pbt(param_space, num_samples=8, cpus_per_trial=2, gpus_per_trial=2 / 4)
+    # result_grid = search_optimal_grid(param_space, num_samples=1, cpus_per_trial=2, gpus_per_trial=2/4)
 
     # analyze experiment results
     experiment_path = os.path.join(CHECKPOINT_DIR, RAYTUNE)
     print(f"Loading results from {experiment_path}...")
+    if is_train_with_external_data:
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+    else:
+        data = split_train_val_test(DATA_DIR)
+    train_config = partial(template_train_config, data=data)
     restored_tuner = tune.Tuner.restore(experiment_path, trainable=train_config)
     result_grid = restored_tuner.get_results()
     best_trial = analyze_experiment_results(result_grid)
 
     # best trained model from {CHECKPOINT_DIR}/{RAYTUNE}/checkpoint.pt
-    fix_depth = best_trial.config["fix_depth"]
-    backbone = best_trial.config["backbone"]
-    best_trained_model = get_model(fix_depth, backbone, len(classes))
+    config = best_trial.config
+    best_trained_model = get_model(config["fix_depth"], config["backbone"], len(classes), config["drop_out"],
+                                   config["hidden_dim"])
     net2device(best_trained_model)
     with best_trial.checkpoint.as_directory() as checkpoint_dir:
         checkpoint = torch.load(os.path.join(checkpoint_dir, "checkpoint.pt"))
@@ -420,39 +433,39 @@ def tune_hyperparameter():
     config = json.loads(open(config_file).read())
 
     if is_train_with_external_data:
-        _, _, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext()
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR)
+        _, _, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext(data)
     else:
-        _, _, test_int_ds = get_dataset_train_val_test()
-        test_ext_ds = get_dataset_external_test()
+        data = split_train_val_test(DATA_DIR)
+        _, _, test_int_ds = get_dataset_train_val_test(data)
+        test_ext_ds = get_dataset_external_test(*get_data(EXTERNAL_DATA_DIR))
 
     # internal test
     truth, probs = infer_each_class(best_trained_model, test_int_ds, classes)
-    SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-subtrain')
+    if len(classes) == 2:
+        SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-subtrain')
 
     # external test
     truth, probs = infer_each_class(best_trained_model, test_ext_ds, classes)
-    SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-subtrain')
+    if len(classes) == 2:
+        SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-subtrain')
 
 
 def train_with_best_hypermaters(config, train_ds, checkpoint_dir):
-    lr = config["lr"]
     batch_size = int(config["batch_size"])
-    weight_decay = config["weight_decay"]
-    fix_depth = config["fix_depth"]
-    backbone = config["backbone"]
     num_epochs = config["num_epochs"]
 
     logger = get_logger(name='clinical')
 
     trainloader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=8)
 
-    net = get_model(fix_depth, backbone, len(classes))
+    net = get_model(config["fix_depth"], config["backbone"], len(classes), config["drop_out"], config["hidden_dim"])
     net2device(net)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(
+    optimizer = getattr(torch.optim, config["optimizer"])(
         filter(lambda p: p.requires_grad, net.parameters()),
-        lr=lr, weight_decay=weight_decay)
+        lr=config["lr"], weight_decay=config["weight_decay"])
     scheduler = lr_scheduler.MultiStepLR(optimizer, [int(num_epochs * 0.8)], gamma=0.1)
 
     start_epoch = _resume_checkpoint(net, optimizer, checkpoint_dir=checkpoint_dir)
@@ -488,14 +501,15 @@ def train_with_best_hypermaters(config, train_ds, checkpoint_dir):
 
 
 def main():
-    # tune hyper parameter
-    tune_hyperparameter()
+    # # tune hyper parameter
+    # tune_hyperparameter()
 
     # get optimal hyperparameter
     config_file = os.path.join(CHECKPOINT_DIR, RAYTUNE, 'best_config.json')
     config = json.loads(open(config_file).read())
 
     # train the whole train dataset with optimal hyperparameter
+    config["num_epochs"] = int(config["num_epochs"] * 1.2)
     CHECKPOINT_DIR_BEST_HYPERPARA = os.path.join(CHECKPOINT_DIR, RAYTUNE, 'best_hyperparameter')
     os.makedirs(CHECKPOINT_DIR_BEST_HYPERPARA, exist_ok=True)
 
@@ -505,26 +519,28 @@ def main():
     logger.info(f"hyperparameter is {config}")
 
     if is_train_with_external_data:
-        train_ds, _, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext(ratio_val=0)
+        data = split_train_val_test_ext(DATA_DIR, EXTERNAL_DATA_DIR, ratio_val=0)
+        train_ds, _, test_int_ds, test_ext_ds = get_dataset_train_val_test_ext(data)
     else:
-        train_ds, _, test_int_ds = get_dataset_train_val_test()
-        test_ext_ds = get_dataset_external_test()
+        data = split_train_val_test(DATA_DIR, ratio_val=0)
+        train_ds, _, test_int_ds = get_dataset_train_val_test(data)
+        test_ext_ds = get_dataset_external_test(*get_data(EXTERNAL_DATA_DIR))
     logger.info(
         f"length of train {len(train_ds)}, length of val 0, length of internal test {len(test_int_ds)}, length of external test {len(test_ext_ds)}")
 
     train_with_best_hypermaters(config, train_ds, CHECKPOINT_DIR_BEST_HYPERPARA)
 
-    fix_depth = config["fix_depth"]
-    backbone = config["backbone"]
-    net = get_model(fix_depth, backbone, len(classes))
+    net = get_model(config["fix_depth"], config["backbone"], len(classes), config["drop_out"], config["hidden_dim"])
     net2device(net)
     net.load_state_dict(torch.load(os.path.join(CHECKPOINT_DIR_BEST_HYPERPARA, 'best.pth')))
 
     truth, probs = infer_each_class(net, test_int_ds, classes)
-    SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-dl')
+    if len(classes) == 2:
+        SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-dl')
 
     truth, probs = infer_each_class(net, test_ext_ds, classes)
-    SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-dl')
+    if len(classes) == 2:
+        SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-dl')
 
 
 if __name__ == "__main__":
