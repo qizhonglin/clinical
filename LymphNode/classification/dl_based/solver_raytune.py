@@ -500,9 +500,10 @@ def train_with_best_hypermaters(config, train_ds, checkpoint_dir):
     print("Finished Training")
 
 
-def main():
-    # # tune hyper parameter
-    # tune_hyperparameter()
+def main(is_tune=False, is_train=False):
+    # tune hyper parameter
+    if is_tune:
+        tune_hyperparameter()
 
     # get optimal hyperparameter
     config_file = os.path.join(CHECKPOINT_DIR, RAYTUNE, 'best_config.json')
@@ -528,7 +529,8 @@ def main():
     logger.info(
         f"length of train {len(train_ds)}, length of val 0, length of internal test {len(test_int_ds)}, length of external test {len(test_ext_ds)}")
 
-    train_with_best_hypermaters(config, train_ds, CHECKPOINT_DIR_BEST_HYPERPARA)
+    if is_train:
+        train_with_best_hypermaters(config, train_ds, CHECKPOINT_DIR_BEST_HYPERPARA)
 
     net = get_model(config["fix_depth"], config["backbone"], len(classes), config["drop_out"], config["hidden_dim"])
     net2device(net)
@@ -536,11 +538,11 @@ def main():
 
     truth, probs = infer_each_class(net, test_int_ds, classes)
     if len(classes) == 2:
-        SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-dl')
+        SensitivitySpecificityStatistics(truth, probs[:, 1]).plot_roc('internal-test-dl', save_dir=os.path.join(CHECKPOINT_DIR_BEST_HYPERPARA, 'outputs'))
 
     truth, probs = infer_each_class(net, test_ext_ds, classes)
     if len(classes) == 2:
-        SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-dl')
+        SensitivitySpecificityStatistics(truth, probs[:, 1]).plot_roc('external-test-dl', save_dir=os.path.join(CHECKPOINT_DIR_BEST_HYPERPARA, 'outputs'))
 
 
 if __name__ == "__main__":

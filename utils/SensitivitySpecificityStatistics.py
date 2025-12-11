@@ -13,20 +13,21 @@
                    21-1-10:
 -------------------------------------------------
 """
+import os 
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, recall_score, auc, roc_curve
 
 
 class SensitivitySpecificityStatistics(object):
-    def __init__(self, y_test, y_pred_score, model_name):
+    def __init__(self, y_test, y_pred_score):
         self.y_test = y_test
         self.y_pred_score = y_pred_score
 
         self.FPR, self.TPR, self.scores = roc_curve(self.y_test, self.y_pred_score)
         # self.calc_sen_spe()
 
-        self.AUC = self.plot_roc(title=model_name)
+        # self.AUC = self.plot_roc(title=title)
 
     def calc_sen_spe(self, num=200):
         y_test = self.y_test
@@ -48,7 +49,7 @@ class SensitivitySpecificityStatistics(object):
         self.FPR = 1 - specificity[::-1]    # from small to large, specificity from large to small
         self.scores = scores[::-1]
 
-    def plot_roc(self, title):
+    def plot_roc(self, title, save_dir=None):
         FPR, TPR, scores = self.FPR, self.TPR, self.scores
 
         plt.figure()
@@ -72,6 +73,11 @@ class SensitivitySpecificityStatistics(object):
         self.add_thresh(FPR[idx], TPR[idx], scores[idx], color='b')
         # idx = self.optimal_thresh_by_thresh()
         # self.add_thresh(FPR[idx], TPR[idx], scores[idx], color='b')
+
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            save_file = os.path.join(save_dir, f'ROC_{title}.png')
+            plt.savefig(save_file)
 
         return AUC
 

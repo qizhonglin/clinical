@@ -79,13 +79,13 @@ def main():
             for file in os.listdir(dir_images_mode):
                 image_file = os.path.join(dir_images_mode, file)
                 mask_file = os.path.join(dir_masks_mode, file)
-                # cvt_contour_mask(image_file, mask_file)
+                cvt_contour_mask(image_file, mask_file)
 
-                # validate convert contour to mask is correct or not?
-                dir_contour_mode = os.path.join(root, group, "contours", name)
-                os.makedirs(dir_contour_mode, exist_ok=True)
-                contour_file = os.path.join(dir_contour_mode, file)
-                cvt_mask_contour(image_file, mask_file, contour_file)
+                # # validate convert contour to mask is correct or not?
+                # dir_contour_mode = os.path.join(root, group, "contours", name)
+                # os.makedirs(dir_contour_mode, exist_ok=True)
+                # contour_file = os.path.join(dir_contour_mode, file)
+                # cvt_mask_contour(image_file, mask_file, contour_file)
 
 
 

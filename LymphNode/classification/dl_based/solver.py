@@ -244,11 +244,11 @@ def main(is_train_with_external_data=True):
 
     truth, probs = infer_each_class(net, test_int_ds, classes)
     if len(classes) == 2:
-        SensitivitySpecificityStatistics(truth, probs[:, 1], 'internal-test-subtrain')
+        SensitivitySpecificityStatistics(truth, probs[:, 1]).plot_roc('internal-test-subtrain')
 
     truth, probs = infer_each_class(net, test_ext_ds, classes)
     if len(classes) == 2:
-        SensitivitySpecificityStatistics(truth, probs[:, 1], 'external-test-subtrain')
+        SensitivitySpecificityStatistics(truth, probs[:, 1]).plot_roc('external-test-subtrain')
 
 
 if __name__ == '__main__':

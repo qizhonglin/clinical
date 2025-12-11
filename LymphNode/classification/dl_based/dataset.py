@@ -17,6 +17,17 @@ from LymphNode.clean_data.split_data import split_train_val_test, get_data, spli
 from transform import RandomCenterCrop, RandomTopCrop
 
 
+def preprocess_image(rgb_image) -> torch.Tensor:
+    image_size = 224
+    preprocessing = val_transform(image_size, image_size)
+
+    img = ImageOps.equalize(rgb_image)
+
+    tensor = preprocessing(img.copy()).unsqueeze(0)
+
+    return tensor
+
+
 class CustomImageDataset(Dataset):
     def __init__(self, images, labels, transform=None, target_transform=None):
         self.images = images

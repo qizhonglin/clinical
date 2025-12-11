@@ -41,6 +41,39 @@ CATEGORIES_NAME = [
 FEATURES_NAME = NUMERICAL_NAME + BINARY_NAME + CATEGORIES_NAME
 COLUMNS = [ID_NAME, '初步超声诊断', OUTCOME_NAME] + FEATURES_NAME
 
+NUMERICAL_NAME_en = [
+    'Major diameter',
+    'Minor diameter',
+    'Major:Minor',
+]
+BINARY_NAME_en = [
+    'Gender',
+    'Lymphatic hilum',
+    'Cortical echo',
+]
+CATEGORIES_NAME_en = [
+    'Location',
+    'Blood Flow Pattern',
+    'Shape',
+    'Edge',
+    'Liquefaction',
+    'Calcification',
+    'Echo'
+]
+FEATURES_NAME_en = NUMERICAL_NAME_en + BINARY_NAME_en + CATEGORIES_NAME_en
+
+def map_chinese2english(features_name):
+    name_dict = {name: name_en for name, name_en in zip(FEATURES_NAME, FEATURES_NAME_en)}
+    result = []
+    for name in features_name:
+        _name = name.split('_')[0]
+        _name_en = name_dict[_name]
+        name_en = name.replace(_name, _name_en)
+        result.append(name_en)
+    return result 
+
+
+
 
 def load_excel(table_file):
     """
@@ -113,18 +146,21 @@ def _get_train_test_from_excel(data_dir, tabelfile):
 
 
 def get_train_test_from_excel(data_dir=DATA_DIR,
-                              tablefile=os.path.join(DATA_ROOT, EXCEL_NAME)):
+                              tablefile=os.path.join(DATA_ROOT, EXCEL_NAME),
+                              has_preprocess=True):
     # split to train and test dataset
     (df_train, diagnosis_train), (df_test, diagnosis_test) = _get_train_test_from_excel(data_dir, tablefile)
 
-    # preprocess
-    df_train_category, df_test_category = preprocess_category(df_train[CATEGORIES_NAME], df_test[CATEGORIES_NAME])
-    df_train = pd.concat([df_train[NUMERICAL_NAME], df_train[BINARY_NAME], df_train_category], axis=1)
-    df_test = pd.concat([df_test[NUMERICAL_NAME], df_test[BINARY_NAME], df_test_category], axis=1)
+    if has_preprocess:
 
-    df_train_num, df_test_num = preprocess_numeric(df_train[NUMERICAL_NAME], df_test[NUMERICAL_NAME])
-    df_train = pd.concat([df_train_num, df_train[BINARY_NAME], df_train_category], axis=1)
-    df_test = pd.concat([df_test_num, df_test[BINARY_NAME], df_test_category], axis=1)
+        # preprocess
+        df_train_category, df_test_category = preprocess_category(df_train[CATEGORIES_NAME], df_test[CATEGORIES_NAME])
+        df_train = pd.concat([df_train[NUMERICAL_NAME], df_train[BINARY_NAME], df_train_category], axis=1)
+        df_test = pd.concat([df_test[NUMERICAL_NAME], df_test[BINARY_NAME], df_test_category], axis=1)
+
+        df_train_num, df_test_num = preprocess_numeric(df_train[NUMERICAL_NAME], df_test[NUMERICAL_NAME])
+        df_train = pd.concat([df_train_num, df_train[BINARY_NAME], df_train_category], axis=1)
+        df_test = pd.concat([df_test_num, df_test[BINARY_NAME], df_test_category], axis=1)
 
     return (df_train, diagnosis_train), (df_test, diagnosis_test)
 
@@ -132,7 +168,8 @@ def get_train_test_from_excel(data_dir=DATA_DIR,
 def get_external_test_from_excel(data_dir=DATA_DIR,
                                  trainfile=os.path.join(DATA_ROOT, EXCEL_NAME),
                                  external_data_dir=EXTERNAL_DATA_DIR,
-                                 external_testfile=os.path.join(DATA_ROOT, EXTERNAL_EXCEL_NAME)):
+                                 external_testfile=os.path.join(DATA_ROOT, EXTERNAL_EXCEL_NAME),
+                                 has_preprocess=True):
     # get external test dataset
     X_test, y_test = get_data(data_dir=external_data_dir)
     ID_test = [os.path.splitext(os.path.basename(file))[0] for file in X_test]
@@ -145,13 +182,16 @@ def get_external_test_from_excel(data_dir=DATA_DIR,
     df_test = df.loc[mask_row, FEATURES_NAME]
     diagnosis_test = df.loc[mask_row, OUTCOME_NAME]
 
-    # preprocess
-    (df_train, diagnosis_train), _ = _get_train_test_from_excel(data_dir, trainfile)
-    df_train_category, df_test_category = preprocess_category(df_train[CATEGORIES_NAME], df_test[CATEGORIES_NAME])
-    df_test = pd.concat([df_test[NUMERICAL_NAME], df_test[BINARY_NAME], df_test_category], axis=1)
 
-    df_train_num, df_test_num = preprocess_numeric(df_train[NUMERICAL_NAME], df_test[NUMERICAL_NAME])
-    df_test = pd.concat([df_test_num, df_test[BINARY_NAME], df_test_category], axis=1)
+    (df_train, diagnosis_train), _ = _get_train_test_from_excel(data_dir, trainfile)
+
+    if has_preprocess:
+        # preprocess
+        df_train_category, df_test_category = preprocess_category(df_train[CATEGORIES_NAME], df_test[CATEGORIES_NAME])
+        df_test = pd.concat([df_test[NUMERICAL_NAME], df_test[BINARY_NAME], df_test_category], axis=1)
+
+        df_train_num, df_test_num = preprocess_numeric(df_train[NUMERICAL_NAME], df_test[NUMERICAL_NAME])
+        df_test = pd.concat([df_test_num, df_test[BINARY_NAME], df_test_category], axis=1)
 
     return df_test, diagnosis_test
 
