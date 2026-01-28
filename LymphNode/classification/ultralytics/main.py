@@ -1,3 +1,6 @@
+import sys
+sys.path.append('/home/qzlin/Documents/clinical')
+
 
 import os 
 import json
@@ -5,8 +8,7 @@ from pathlib import Path
 from tqdm import tqdm
 from ultralytics import YOLO
 
-import sys
-sys.path.append('/home/qzlin/Documents/clinical')
+
 from LymphNode.config import DATA_ROOT as root, CHECKPOINT_DIR
 
 
@@ -14,10 +16,10 @@ from LymphNode.config import DATA_ROOT as root, CHECKPOINT_DIR
 def train(data_dir, project_dir, pretrain_model_file, device=[1]):
     model = YOLO(model=pretrain_model_file, task="classify")
     model.train(data=data_dir,
-                epochs=50, imgsz=640, device=device,
+                epochs=50, imgsz=224, device=device,
                 project=project_dir,
                 amp=False,
-                batch=-1,
+                batch=32,
                 )
     
 def infer(test_dir, project_dir):
@@ -41,7 +43,7 @@ def infer(test_dir, project_dir):
                 info[img_file]['pred'] = best_model.names[cls_pred]
                 info[img_file]['conf'] = conf
                 
-    print(info)
+    # print(info)
     with open(os.path.join(project_dir, 'test.json'), 'w') as f:
         json.dump(info, f, indent=4)      
 

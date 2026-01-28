@@ -101,7 +101,7 @@ def split_train_val_test_ext(data_dir, external_data_dir, ratio_val=0.25):
 
     return data
 
-def prepare_data(json_file, data_dir, target_width=640):
+def prepare_data(json_file, data_dir, target_width=640, is_equalize=True):
     with open(json_file, "r") as f:
         data = json.load(f)
         
@@ -125,33 +125,39 @@ def prepare_data(json_file, data_dir, target_width=640):
             dst_path = os.path.join(split_dir, label, os.path.basename(img_path))
             
             image = Image.open(img_path)
-            image = ImageOps.equalize(image)
-            image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-            new_size = (target_width, target_width)
-            resized = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-            cv2.imwrite(dst_path, resized)
+            if is_equalize:
+                image = ImageOps.equalize(image)
+                image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                new_size = (target_width, target_width)
+                image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
+            else:
+                image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+            cv2.imwrite(dst_path, image)
 
 def main():
-    data = split_train_val_test(DATA_DIR)
-    data1 = split_train_val_test(DATA_DIR)
-    assert set(data["X_train"]) == set(data1["X_train"])
-    assert set(data["X_val"]) == set(data1["X_val"])
-    assert set(data["X_test"]) == set(data1["X_test"])
-    empty = set(data["X_train"]) & set(data["X_val"]) & set(data["X_test"])
-    assert not empty
+    # data = split_train_val_test(DATA_DIR)
+    # data1 = split_train_val_test(DATA_DIR)
+    # assert set(data["X_train"]) == set(data1["X_train"])
+    # assert set(data["X_val"]) == set(data1["X_val"])
+    # assert set(data["X_test"]) == set(data1["X_test"])
+    # empty = set(data["X_train"]) & set(data["X_val"]) & set(data["X_test"])
+    # assert not empty
+    
+    # json_file = os.path.join(DATA_DIR, "data_split.json")
+    # with open(json_file, "w") as f:
+    #     json.dump(data, f, indent=4)
+        
+    # prepare_data(json_file, data_dir=os.path.join(DATA_ROOT, "experiments_equ"))
+
+    # data = split_train_val_test(DATA_DIR, ratio_val=0)
+    # assert not data["X_val"] and not data["y_val"]
+
+    # images, labels = get_data(data_dir=EXTERNAL_DATA_DIR)
+    # print(len(images))
+    # print(images)
     
     json_file = os.path.join(DATA_DIR, "data_split.json")
-    with open(json_file, "w") as f:
-        json.dump(data, f, indent=4)
-        
-    prepare_data(json_file, data_dir=os.path.join(DATA_ROOT, "experiments"))
-
-    data = split_train_val_test(DATA_DIR, ratio_val=0)
-    assert not data["X_val"] and not data["y_val"]
-
-    images, labels = get_data(data_dir=EXTERNAL_DATA_DIR)
-    print(len(images))
-    print(images)
+    prepare_data(json_file, data_dir=os.path.join(DATA_ROOT, "experiments"), is_equalize=False)
     
     
         
